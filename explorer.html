@@ -1,0 +1,1080 @@
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>Проводник</title>
+    <link rel="shortcut icon" href="/favicon.ico?v=2" type="image/x-icon" />
+    <script>
+        getCGIVar = function(name) {
+            var startPos = window.location.href.indexOf('&'+name+'=');
+            if (startPos == (-1)) {
+                startPos = window.location.href.indexOf('?'+name+'=');
+                if (startPos == (-1)) {
+                    return (-1);
+                }
+            }
+            var endPos = window.location.href.indexOf('&', startPos+1);
+            if (endPos == (-1)) {
+                return window.location.href.substr(startPos+name.length+2);
+            } else {
+                return window.location.href.substr(startPos+name.length+2, endPos-(startPos+name.length+2));
+            }
+        }
+        if ((window.name.length==0) || (window.name.indexOf('rcExplorer')==(-1)) || (window.name.indexOf('-')<=0)) {
+            window.location.href = '/login.html';
+        } else {
+            _sid = window.name.substring(window.name.indexOf('-')+1);
+            if (_sid.length == 0) {
+                window.location.href = '/login.html';
+            } else {
+                if (getCGIVar('theme') == (-1)) {
+                    theme = 'default';
+                    document.write('<link rel="stylesheet" type="text/css" href="ext/resources/css/ext-all.css" />');
+                } else {
+                    theme = getCGIVar('theme');
+                    document.write('<link rel="stylesheet" type="text/css" href="ext/resources/css/ext-all-'+theme+'.css" />');
+                }
+            }
+        }
+    </script>
+
+    <link rel="stylesheet" type="text/css" href="/common.css?22" />
+
+    <script type="text/javascript" language="JavaScript" src="/flot/jquery.min.js"></script>
+    <script type="text/javascript" language="JavaScript" src="/flot/jquery.flot.min.js"></script>
+    <script type="text/javascript" language="JavaScript" src="/flot/jquery.flot.resize.min.js"></script>
+    <script type="text/javascript" language="JavaScript" src="/flot/jquery.flot.crosshair.min.js"></script>
+
+    <script type="text/javascript" language="JavaScript" src="ext/ext-all.js"></script>
+    <script type="text/javascript" language="JavaScript" src="ext/locale/ext-lang-ru.js"></script>
+<script>
+
+Ext.Loader.setConfig({enabled: true});
+Ext.Loader.setPath('Lib', 'Lib');
+Ext.require([
+    'Lib.Portlet',
+    'Lib.PortalColumn',
+    'Lib.PortalPanel',
+    'Lib.PortalDropZone',
+    'Lib.GoodScrollGrid'
+]);
+
+Ext.onReady(function() {
+    var URL_PREFIX = '/uidispd';
+    var KEEP_ALIVE_INTERVAL = 60000;
+    var GET_SERVER_INFO_INTERVAL = 60000;
+    var MAX_CHART_DATA_LENGTH = 100;
+
+    Ext.define('Ext.Ajax', {
+        extend: 'Ext.data.Connection',
+        singleton: true,
+        autoAbort: false,
+        busy: false,
+        queue: [],
+        authError: false,
+        requestFunc: Ext.Ajax.request,
+        request: function(options) {
+            if (Ext.Ajax.authError) return;
+            if (this.busy) {
+                this.queue.push(options);
+            } else {
+                this.busy = true;
+                return this.requestFunc(options);
+            }
+        },
+        listeners: {
+            requestcomplete: function(conn, response, options) {
+                var result = eval('('+response.responseText+')');
+                if ((result['success']!==undefined) && (result['success']===false)) {
+                    var errorMessage = result.error.message;
+                    if (errorMessage.indexOf('ORA-20002') != (-1)) {
+                        Ext.Msg.alert('Ошибка', errorMessage, function() {
+                            window.location.href = '/login.html';
+                        });
+                        conn.authError = true;
+                        delete options.success;
+                        delete options.callback;
+                        return;
+                    }
+                }
+
+                conn.busy = false;
+                if (conn.queue.length > 0) {
+                    Ext.Ajax.request(conn.queue.shift());
+                }
+            },
+            requestexception: function(conn, response, options) {
+                conn.busy = false;
+                if (conn.queue.length > 0) {
+                    Ext.Ajax.request(conn.queue.shift());
+                }
+            }
+        }
+    });
+    Ext.Ajax.timeout = 300000;
+    Ext.Ajax.extraParams = {'_sid': _sid};
+
+    if (window.location.href.indexOf('updthm=1') !== (-1)) {
+        Ext.Ajax.request({
+            url: URL_PREFIX+'?f=ifc_api.set_current_user_theme&theme='+theme,
+            failure: function(response, opts) {
+                OnServerError();
+            }
+        });
+    }
+
+    Ext.QuickTips.init();
+
+    Ext.Msg.down('#yes').setText("Да");
+    Ext.Msg.down('#no').setText("Нет");
+    Ext.Msg.down('#cancel').setText("Отмена");
+
+    Ext.create('Ext.window.Window', {
+        xtype: 'window',
+        id: 'Window_changePassword',
+        closable: true,
+        closeAction: 'hide',
+        minimizable: false,
+        modal: true,
+        title: 'Смена пароля пользователя',
+        height: 150,
+        width: 350,
+        constrain: true,
+        layout: 'fit',
+        items: [{
+            xtype: 'form',
+            itemId: 'form',
+            bodyPadding: 5,
+            url: URL_PREFIX+'?f=ifc_api.change_current_user_password',
+            layout: 'anchor',
+            defaults: {anchor: '100%'},
+            defaultType: 'textfield',
+            items: [{
+                fieldLabel: 'Новый пароль',
+                itemId: 'password',
+                name: 'pwd',
+                inputType: 'password',
+                allowBlank: false
+            },{
+                fieldLabel: 'Подтверждение',
+                itemId: 'confPassword',
+                name: 'user_conf_password',
+                inputType: 'password',
+                allowBlank: false
+            }],
+            buttons: [{
+                iconCls: 'ico-form-ok',
+                text: 'Сохранить',
+                handler: function() {
+                    var form = this.up('form').getForm();
+                    if (form.isValid()) {
+                        if (Ext.ComponentManager.get('Window_changePassword').getComponent('form').getComponent('password').getValue() != Ext.ComponentManager.get('Window_changePassword').getComponent('form').getComponent('confPassword').getValue()) {
+                            Ext.Msg.alert('Ошибка', 'Пароль не соответствует подтверждению.');
+                            return;
+                        }
+                        form.submit({
+                            method: 'GET',
+                            success: function(form, action) {
+                                Ext.ComponentManager.get('Window_changePassword').close();
+                                Ext.Msg.alert('Сообщение', 'Пароль успешно изменен.');
+                            },
+                            failure: function(form, action) {
+                                switch (action.failureType) {
+                                    case Ext.form.action.Action.CLIENT_INVALID:
+                                        Ext.Msg.alert('Ошибка', 'Поля формы содержат ошибки');
+                                        break;
+                                    case Ext.form.action.Action.CONNECT_FAILURE:
+                                        Ext.Msg.alert('Ошибка', 'Невозможно связаться с сервером');
+                                        break;
+                                    case Ext.form.action.Action.SERVER_INVALID:
+                                        Ext.Msg.alert('Ошибка', action.result.error.message);
+                                }
+                            }
+                        });
+                    }
+                }
+            }]
+        }],
+        listeners: {
+            show: function(window, options) {
+                window.getComponent('form').getComponent('password').setValue('').clearInvalid();
+                window.getComponent('form').getComponent('confPassword').setValue('').clearInvalid();
+            }
+        }
+    });
+
+    keepAliveFailures = 0;
+
+    function OnKeepAliveFailure() {
+        keepAliveFailures++;
+        if (keepAliveFailures > 4) {
+            Ext.get('ico-keep-alive').hide();
+            Ext.Msg.alert('Ошибка', 'Сервер не отвечает. Сессия прервана. Пожалуйста, повторите авторизацию.', function() {
+                window.location.href = '/login.html';
+            });
+        } else {
+            setTimeout(KeepAlive, KEEP_ALIVE_INTERVAL);
+        }
+    }
+
+    function KeepAlive() {
+        Ext.Ajax.request({
+            url: URL_PREFIX+'?f=keep_alive',
+            success: function(response) {
+                if (response.responseText.length == 0) {
+                    OnKeepAliveFailure();
+                } else {
+                    var responseObj = eval('('+response.responseText+')');
+                    if ((responseObj!==undefined) && (responseObj['success']==false)) {
+                        if ((responseObj.error!==undefined) && (responseObj.error.message!==undefined)) {
+                            Ext.get('ico-keep-alive').hide();
+                            Ext.Msg.alert('Ошибка', 'Сессия прервана. Пожалуйста, повторите авторизацию.', function() {
+                                window.location.href = '/login.html';
+                            });
+                        }
+                        return;
+                    }
+                    keepAliveFailures = 0;
+                    setTimeout(KeepAlive, KEEP_ALIVE_INTERVAL);
+                }
+            },
+            failure: function(response, opts) {
+                OnKeepAliveFailure();
+            }
+        });
+    }
+
+    setTimeout(KeepAlive, KEEP_ALIVE_INTERVAL);
+
+    function OnServerError() {
+        Ext.Msg.alert('Ошибка', 'Сервер не отвечает. Сессия может быть прервана. Пожалуйста, повторите авторизацию.', function() {
+            window.location.href = '/login.html';
+        });
+    }
+
+    var Store_favoriteApplications = Ext.create('Ext.data.Store', {
+        fields: [
+            {name: 'application_alias', type: 'string'},
+            {name: 'application_name', type: 'string'},
+            {name: 'application_comment', type: 'string'},
+            {name: 'application_type', type: 'string'}
+        ],
+        autoLoad: false
+    });
+
+    var Store_reports = Ext.create('Ext.data.Store', {
+        fields: [
+            {name: 'alias', type: 'string'},
+            {name: 'name', type: 'string'},
+            {name: 'type', type: 'int'},
+            {name: 'status', type: 'string'},
+            {name: 'datetime', type: 'string'},
+            {name: 'result', type: 'string'}
+        ],
+        autoLoad: false
+    });
+
+    var Store_messages = Ext.create('Ext.data.Store', {
+        fields: [
+            {name: 'id', type: 'int'},
+            {name: 'start_date', type: 'string'},
+            {name: 'title', type: 'string'},
+            {name: 'body', type: 'string'},
+            {name: 'appl_alias', type: 'string'},
+            {name: 'attention_fl', type: 'string'},
+            {name: 'appl_type', type: 'string'}
+        ],
+        autoLoad: false
+    });
+
+    var Store_serverInfo = Ext.create('Ext.data.Store', {
+        fields: [
+            {name: 'metrics_name', type: 'string'},
+            {name: 'd', type: 'date', dateFormat: 'd.m.Y H:i:s'},
+            {name: 'n1', type: 'float'},
+            {name: 'metrics_data', type: 'string'}
+        ],
+        proxy: {
+            type: 'ajax',
+            url: URL_PREFIX+'?f=ifc_explorer_api.get_server_info_list&full_refresh_fl=1',
+            reader: {
+                type: 'json',
+                root: 'data',
+                totalProperty: 'count'
+            },
+            listeners: {
+                exception: function(proxy, response, operation, options) {
+                    var errorMsg = '';
+                    try {
+                        var result = eval('('+response.responseText+')');
+                        if (!result.success) {
+                            errorMsg = result.error.message;
+                        }
+                    } catch (e) {
+                        if (response.status == '0') {
+                            errorMsg = 'Сервер не отвечает.';
+                        } else {
+                            errorMsg = 'Сервер вернул код ошибки '+response.status+'.';
+                        }
+                    } finally {
+                        Ext.Msg.alert('Ошибка', errorMsg, function() {
+                            if(result) {
+                                if (result['error']['message'].indexOf('ORA-20002') != (-1)) {
+                                    window.parent.location.href = '/login.html';
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        },
+        autoLoad: false,
+        ifcUsersChartData: [],
+        termUsersChartData: [],
+        shiftArray: function(arr) {
+            if (arr.length > MAX_CHART_DATA_LENGTH) {
+                var shiftCount = MAX_CHART_DATA_LENGTH-arr.length;
+                for (var i=0; i<shiftCount; i++) {
+                    arr.shift();
+                }
+            }
+        },
+        listeners: {
+            load: function(store, records, successful, operation, options) {
+                if (!successful) {
+                    return;
+                }
+                Store_serverInfo.proxy.url = URL_PREFIX+'?f=ifc_explorer_api.get_server_info_list';
+                var serverInfo = '';
+                for (var i=0; i<records.length; i++) {
+                    if (records[i].data['metrics_name'] === 'TOTAL_INFO'){
+                        Ext.getCmp('TextItem_serverInfo').setText(records[i].data['metrics_data']);
+                    } else if (records[i].data['metrics_name'] === 'FAVORITE_APPL') {
+                        var application = records[i].data['metrics_data'].split('\x01');
+                        Store_favoriteApplications.add({'application_alias': application[0], 'application_name': application[1], 'application_comment': application[2], 'application_type': application[3]});
+                    } else if (records[i].data['metrics_name'] === 'RPT') {
+                        var report = records[i].data['metrics_data'].split('\x01');
+                        Store_reports.add({'alias': report[0], 'name': report[1], 'type': report[2], 'status': report[3], 'datetime': report[4], 'result': report[6]});
+                    } else if (records[i].data['metrics_name'] === 'MSG') {
+                        var message = records[i].data['metrics_data'].split('\x01');
+                        Store_messages.add({'id': message[0], 'start_date': message[1], 'title': message[2], 'body': message[3], 'appl_alias': message[4], 'attention_fl': message[5], 'appl_type': message[6]});
+                    } else if (records[i].data['metrics_name'] === 'IFC_USER') {
+                        store.ifcUsersChartData.push([records[i].data['d'], records[i].data['n1']]);
+                    } else if (records[i].data['metrics_name'] === 'TERM_USER') {
+                        store.termUsersChartData.push([records[i].data['d'], records[i].data['n1']]);
+                    }
+                }
+
+                store.shiftArray(store.ifcUsersChartData);
+                store.shiftArray(store.termUsersChartData);
+
+                $.plot($("#chart"),
+                    [{label: "&nbsp;WEB", color: '#28428c', data: store.ifcUsersChartData}, {label: "&nbsp;ТСД", color: '#4ac936', data: store.termUsersChartData}],
+                    {
+                        bars: {show: false},
+                        xaxis: {
+                            mode: 'time',
+                            tickFormatter: function (val, axis) {
+                                var date = new Date(val);
+                                var hours = date.getHours();
+                                if (hours < 10) {hours = '0'+hours;}
+                                var minutes = date.getMinutes();
+                                if (minutes < 10) {minutes = '0'+minutes;}
+                                return hours+':'+minutes;
+                            },
+                            monthNames: ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+                        },
+                        legend: {position: 'sw'}
+                    }
+                );
+
+                setTimeout(function() {Store_serverInfo.load()}, GET_SERVER_INFO_INTERVAL);
+            }
+        }
+    });
+
+    Ext.define('Explorer', {
+        extend: 'Ext.tab.Panel',
+        alias: 'widget.explorer',
+        width: Ext.getBody().getWidth(),
+        height: Ext.getBody().getHeight(),
+        layout: 'fit',
+        bbar: [{
+            xtype: 'button',
+            id: 'Button_start',
+            icon: '/images/icons/standby.png',
+            text: 'Пуск'
+        },'-'],
+        initComponent: function() {
+            Ext.apply(this, {
+                items: [{
+                    id: 'Tab_explorer',
+                    title: 'Проводник',
+                    layout: 'fit',
+                    tbar: [{xtype: 'tbtext', id: 'TextItem_serverInfo', text: '&nbsp;'}],
+                    showMessageWindow: function(id) {
+                        var msgRecord = Store_messages.getById(id);
+                        if (msgRecord != undefined) {
+                            if ((msgRecord.data['body']!=undefined) && (msgRecord.data['body'].length>0)) {
+                                var windowSize = msgRecord.data['body'].split('#', 2);
+                                var msgBody = msgRecord.data['body'];
+                                if ((windowSize[0]!=undefined) && (windowSize[1]!=undefined)) {
+                                    msgBody = msgRecord.data['body'].substring(windowSize[0].length+windowSize[1].length+2);
+                                } else {
+                                    windowSize[0] = 400;
+                                    windowSize[1] = 300;
+                                }
+                                var windowContent = msgBody;
+                                if (msgBody.substr(0, 1) === '/') {
+                                    windowContent = '<iframe src="'+windowContent+'" frameborder="no" width="100%" height="100%"></iframe>';
+                                }
+                                Ext.create('Ext.window.Window', {
+                                    closable: true,
+                                    closeAction: 'destroy',
+                                    minimizable: false,
+                                    modal: true,
+                                    autoScroll: true,
+                                    title: msgRecord.data['title'],
+                                    width: windowSize[0],
+                                    height: windowSize[1],
+                                    constrain: true,
+                                    layout: 'fit',
+                                    html: windowContent
+                                }).show();
+                            }
+                        }
+                    },
+                    items: [{
+                        xtype: 'portalpanel',
+                        frame: false,
+                        //width: 1200,
+                        //height: 250,
+                        //top: 100,
+                        //flex: 1,
+                        items: [{
+                            items: [{
+                                    id: 'Panel_chart',
+                                    title: "График активности пользователей",
+                                    height: 250,
+                                    html: '<div id="chart" style="width: 100%; height: 100%;"></div>',
+                                    closable: false,
+                                    collapsible: false
+                                },{
+                                    id: 'Panel_messages',
+                                    title: 'Мои сообщения',
+                                    height: 250,
+                                    layout: 'fit',
+                                    closable: false,
+                                    collapsible: false,
+                                    items: [{
+                                        xtype: 'dataview',
+                                        store: Store_messages,
+                                        autoScroll: 'auto',
+                                        itemSelector: 'tr.message',
+                                        tpl: '<table>' +
+                                             '<tpl for=".">' +
+                                               '<tr class="message">' +
+                                                 '<td style="padding: 3px;"><tpl if="appl_alias != \'\'"><img src="/images/applications/small/{appl_alias}.png" /></tpl></td>' +
+                                                 '<td style="padding: 3px;">' +
+                                                    '<span class="x-panel-body">' +
+                                                        '{start_date}&nbsp;&nbsp;&nbsp;' +
+                                                        '<tpl if="body != \'\'">' +
+                                                            '<a href="javascript:Ext.getCmp(\'Tab_explorer\').showMessageWindow({id})" class="message">' +
+                                                        '</tpl>' +
+                                                        '<tpl if="attention_fl == 1">' +
+                                                            '<font color="#f00">' +
+                                                        '</tpl>' +
+                                                        '{title}' +
+                                                        '<tpl if="attention_fl == 1">' +
+                                                            '</font>' +
+                                                        '</tpl>' +
+                                                        '<tpl if="body != \'\'"></a></tpl></span></td>' +
+                                               '</tr>' +
+                                             '</tpl>' +
+                                             '</table>'
+                                    }]
+                                }
+                            ]
+                        },{
+                            items: [{
+                                    id: 'Panel_reports',
+                                    title: 'Мои отчеты',
+                                    height: 250,
+                                    layout: 'fit',
+                                    closable: false,
+                                    collapsible: false,
+                                    layout: 'fit',
+                                    items: [{
+                                        xtype: 'goodscrollgrid',
+                                        id: 'Grid_reports',
+                                        store: Store_reports,
+                                        hideHeaders: true,
+                                        columns: [{
+                                            width: 30,
+                                            align: 'center',
+                                            dataIndex: 'status',
+                                            sortable: false,
+                                            renderer: function (value) {
+                                                var imageIndex = 2;
+                                                if (value === 'WAIT') {
+                                                    imageIndex = 0;
+                                                } else if (value === 'SUCCESS') {
+                                                    imageIndex = 1;
+                                                }
+                                                return '<div style=" height: 16px; \
+                                                                     background-image: url(/images/icons/reportstatus' + imageIndex + '.png); \
+                                                                     background-position: 50%; \
+                                                                     background-repeat: no-repeat; \
+                                                                     background-color: transparent; \
+                                                        "></div>';
+                                            }
+                                        },{
+                                            width: 120,
+                                            align: 'right',
+                                            dataIndex: 'datetime',
+                                            sortable: false
+                                        },{
+                                            width: 450,
+                                            align: 'left',
+                                            dataIndex: 'name',
+                                            sortable: false,
+                                            renderer: function(value, metaData, record) {
+                                                var status = record.get('status');
+                                                if (status === 'ERROR') {
+                                                    return '<a style="color:red" href="javascript:void(0)" onclick="Ext.getCmp(\'Grid_reports\').showError()">' + value + '</a>';
+                                                } else if (status == 'SUCCESS') {
+                                                    return '<a href="' + record.data['result'] + '" target="_blank">' + value + '</a>';
+                                                }
+                                                return value;
+                                            }
+                                        }],
+                                        showError: function() {
+                                            var me = this;
+                                            var record = me.getSelectionRecord();
+                                            if (!record) return;
+                                            Ext.Msg.show({
+                                                title: 'Ошибка формирования отчета',
+                                                msg: String(record.get('result')).substr(1),
+                                                buttons: Ext.Msg.OK,
+                                                icon: Ext.window.MessageBox.ERROR
+                                            });
+                                        }
+                                    }]
+                                },{
+                                    id: 'Panel_favoriteApplications',
+                                    title: 'Недавние запущенные приложения',
+                                    height: 250,
+                                    layout: 'fit',
+                                    closable: false,
+                                    collapsible: false,
+                                    items: [{
+                                        xtype: 'dataview',
+                                        store: Store_favoriteApplications,
+                                        autoScroll: 'auto',
+                                        itemSelector: 'tr.fav-app',
+                                        tpl: '<table>' +
+                                             '<tpl for=".">' +
+                                               '<tr class="fav-app">' +
+                                                 '<td style="padding: 3px;"><a href="javascript:void(0)" onclick="runApplication(\'{application_alias}\', \'{application_name}\', null, \'{application_type}\')" class="x-panel-body"><img src="<tpl if="application_type == \'extjs6\'">/ExtJS6</tpl>/images/applications/small/{application_alias}.png" /></a></td>' +
+                                                 '<td style="padding: 3px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="javascript:void(0)" onclick="runApplication(\'{application_alias}\', \'{application_name}\', null, \'{application_type}\')" class="x-panel-body">{application_name}</a></td>' +
+                                               '</tr>' +
+                                             '</tpl>' +
+                                             '</table>'
+                                    }]
+                                }
+                            ]
+                        }]
+                    }],
+                    listeners: {
+                        afterrender: function(panel) {
+                            Store_serverInfo.load();
+                        }
+                    }
+                }]
+            });
+            this.callParent(arguments);
+        },
+        listeners: {
+            tabchange: function(tabPanel, newCard) {
+                if (newCard.itemId != undefined) {
+                    Ext.getCmp('Button_appInfo').setDisabled(false);
+                } else {
+                    Ext.getCmp('Button_appInfo').setDisabled(true);
+                }
+
+                if( newCard && !Ext.isEmpty(newCard.itemId) ) {
+                    var iframe = Ext.get('iframe-app-' + newCard.itemId.substring(3) );
+                    if( iframe && iframe.dom.contentWindow.Ext ) {
+                        var messArray = iframe.dom.contentWindow.Ext.ComponentQuery.query( 'messagebox' );
+                        Ext.each( messArray, function( mess ) {
+                            if( mess.isVisible( true ) ) {
+                                mess.setSize( 600, 600 );
+                                mess.doAutoSize(true);
+                                mess.focus();
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    });
+
+    Ext.define('ExplorerViewport', {
+        extend: 'Ext.container.Viewport',
+        layout: 'fit',
+        renderTo: Ext.getBody(),
+        initComponent: function() {
+            Ext.apply(this, {
+                items: [{xtype: 'explorer', id: 'Explorer'}]
+            });
+            this.callParent(arguments);
+        }
+    });
+    Ext.create('ExplorerViewport');
+
+    handlerShowPrivs = function() {
+        var app = Ext.getCmp('Explorer').getActiveTab().itemId.substr(3);
+        document.getElementById('iframe-app-'+app).contentWindow.app.showPrivsWindow();
+    };
+
+    handlerResetStates = function() {
+        Ext.Msg.show({
+            title:'Сброс настроек приложения "' + Ext.getCmp('Explorer').getActiveTab().title + '"',
+            msg: 'Приложение будет перезапущенно. Сбросить настройки?',
+            buttons: Ext.Msg.YESNO,
+            icon: Ext.window.MessageBox.QUESTION,
+            fn: function(btn) {
+                if (btn == 'yes') {
+                    Ext.Ajax.request({
+                        url: URL_PREFIX+'?f=ifc_api.reset_current_user_appl_state&appl_alias='+Ext.getCmp('Explorer').getActiveTab().itemId.substr(3),
+                        success: function(response) {
+                            var app = Ext.getCmp('Explorer').getActiveTab().itemId.substr(3);
+                            document.getElementById('iframe-app-'+app).contentWindow.location.reload();
+                        },
+                        failure: function(response, opts) {
+                            OnServerError();
+                        }
+                    });
+                }
+            }
+        });
+    };
+
+    handlerChangePassword = function() {
+        Ext.ComponentManager.get('Window_changePassword').show();
+    };
+
+    handlerChangePalette = function() {
+        Ext.ComponentManager.get('Menu_themes').showAt(Ext.get('ico-palette').getXY());
+    };
+
+    handlerLogout = function() {
+        Ext.Msg.show({
+            title:'Выход',
+            msg: 'Выйти из системы?',
+            buttons: Ext.Msg.YESNO,
+            icon: Ext.window.MessageBox.QUESTION,
+            fn: function(btn) {
+                if (btn == 'yes') {
+                    Ext.Ajax.request({
+                        url: URL_PREFIX+'?f=ifc_api.logout',
+                        success: function(response) {
+                            if (response.responseText.length == 0) {
+                                OnServerError();
+                            }
+                            window.location.href = '/login.html';
+                        },
+                        failure: function(response, opts) {
+                            OnServerError();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    Ext.Ajax.request({
+        url: URL_PREFIX+'?f=ifc_explorer_api.get_user_info',
+        success: function(response) {
+            if (response.responseText.length == 0) {
+                OnServerError();
+            } else {
+                var result = eval('('+response.responseText+')');
+                if (result['error'] !== undefined) {
+                    if (result['error']['message'].indexOf('ORA-20002') != (-1)) {
+                        window.location.href = '/login.html';
+                    } else {
+                        Ext.Msg.alert('Ошибка', result['error']['message']);
+                    }
+                } else {
+                    new Ext.menu.Menu({
+                        id: 'Menu_themes',
+                        items: [{
+                            icon: '/images/icons/themes/default.png',
+                            text: 'Светло-синяя',
+                            hidden: theme==='default',
+                            handler: function() {
+                                window.location.href='/explorer.html?updthm=1';
+                            }
+                        },{
+                            icon: '/images/icons/themes/gray.png',
+                            text: 'Серая',
+                            hidden: theme==='gray',
+                            handler: function() {
+                                window.location.href='/explorer.html?updthm=1&theme=gray';
+                            }
+                        }]
+                    });
+                    Ext.getCmp('Tab_explorer').setTitle("Проводник: "+result['data'][0]['server_name']);
+                    document.title = result['data'][0]['server_name'];
+                    var explorerToolbar = Ext.getCmp('Button_start').ownerCt;
+                    explorerToolbar.add('->');
+                    explorerToolbar.add('-');
+                    explorerToolbar.add({xtype: 'button',
+                        id: 'Button_appInfo',
+                        icon: '/images/icons/info.png',
+                        tooltip: 'Информация о приложении',
+                        disabled: true,
+                        menu: {
+                            items: [{
+                                icon: '/images/icons/employees.png',
+                                text: 'Привилегии пользователя',
+                                handler: handlerShowPrivs
+                            },{
+                                icon: '/images/icons/cancel.png',
+                                text: 'Сбросить настройки',
+                                handler: handlerResetStates
+                            }]
+                        }
+                    });
+                    explorerToolbar.add('-');
+                    explorerToolbar.add({xtype: 'button', icon: '/images/icons/key.png', tooltip: 'Сменить пароль', handler: handlerChangePassword});
+                    explorerToolbar.add('-');
+                    explorerToolbar.add({xtype: 'button', icon: '/images/icons/palette.png', tooltip: 'Тема', handler: handlerChangePalette});
+                    explorerToolbar.add('-');
+                    explorerToolbar.add({xtype: 'button', icon: '/images/icons/logout.png', tooltip: 'Выход', handler: handlerLogout});
+                    explorerToolbar.add('-');
+                    explorerToolbar.add(result['data'][0]['full_name']);
+                    explorerToolbar.add(' ');
+                    if ((result['data'][0]['start_application_alias']!==null) &&
+                        (result['data'][0]['start_application_alias'].length>0)) {
+                        runApplication(result['data'][0]['start_application_alias'], result['data'][0]['start_application_name'], null, result['data'][0]['start_application_type']);
+                    }
+                    getApplicationList();
+                }
+            }
+        },
+        failure: function(response, opts) {
+            OnServerError();
+        }
+    });
+
+    isComponentVisible = function( id ) {
+        var frames = window.frames;
+        for ( var i = 0; i < frames.length; ++i ) {
+            if( frames[i].Ext &&
+                frames[i].Ext.getCmp( id ) &&
+                frames[i].Ext.getCmp( id ).isVisible( true ) ) {
+                    return true;
+            }
+        }
+        return false;
+    },
+
+    runApplication = function(appFile, appName, appParams, appType) {
+        Ext.Ajax.request({
+            url: URL_PREFIX+'?f=ifc_explorer_api.check_app_block',
+            params: {
+                application_alias: appFile
+            },
+            success: function(response) {
+                if (response.responseText.length == 0) {
+                    OnServerError();
+                } else {
+                    var result = eval('('+response.responseText+')');
+                    if (result['error'] !== undefined) {
+                        Ext.Msg.alert('Ошибка', result['error']['message']);
+                    } else {
+                            var tab = Ext.getCmp('Explorer').items.get('app'+appFile);
+                            if (tab !== undefined) {
+                                tab.show();
+                                if (appParams !== undefined) {
+                                    Ext.get('iframe-app-'+appFile).dom.contentWindow.app.onChangeAppParams(appParams);
+                                }
+                            } else {
+                                if(appType == 'extjs6') {
+                                    var url = 'ExtJS6/index.html?app='+appFile+'&_sid='+_sid;
+                                    if (appParams !== undefined) {
+                                        if (typeof appParams === 'object') {
+                                            for (pName in appParams) {
+                                                url += '&p_' + pName + '=' + encodeURIComponent(appParams[pName]);
+                                            }
+                                        }
+                                    }
+                                }else{
+                                    var url = '/application.html?app='+appFile+'&_sid='+_sid;
+                                    if (appParams !== undefined) {
+                                        if (typeof appParams === 'object') {
+                                            for (pName in appParams) {
+                                                url += '&p_' + pName + '=' + encodeURIComponent(appParams[pName]);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Ext.Ajax.request({
+                                    url: URL_PREFIX+'?f=ifc_common_component_api.get_params',
+                                    params: {
+                                        appl_alias: appFile,
+                                        names: 'MNH_BLOCK_WMS_APPLICATIONS'
+                                    },
+                                    success: function(response) {
+                                        var isManhattanOn = eval('('+response.responseText+')').data[0].param_value == 1;
+                                        Ext.getCmp('Explorer').add({
+                                            title: appName,
+                                            itemId: 'app'+appFile,
+                                            isManhattanOn: isManhattanOn,
+                                            closable: true,
+                                            html: '<iframe id="iframe-app-'+appFile+'" name="'+appFile+'" src="'+url+'" frameborder="no" width="100%" height="100%" \
+                                                           onload="parent.keyMapHandler.addFrame(this); this.contentDocument.addEventListener(\'click\', parent.hideStartMenu, true);"></iframe>',
+                                            listeners : {
+                                                removed: function(tab, ownerCt, options) {
+                                                    var app = document.getElementById('iframe-app-'+tab.itemId.substr(3)).contentWindow.app;
+                                                    if (app) {
+                                                        app.fireEvent('close');
+                                                    }else{
+                                                        console.log('Не найден таб iframe-app-'+appFile);
+                                                    }
+                                                }
+                                            }
+                                        }).show();
+                                    },
+                                });
+
+                            }
+                    }
+                }
+            },
+            failure: function(response, opts) {
+                OnServerError();
+            }
+        });
+
+    };
+
+    getApplicationList = function() {
+        applications = [];
+        var Store_menuList = new Ext.data.Store({
+            fields: ['item_code', 'parent_item_code', 'item_name', 'application_alias', 'application_type'],
+            proxy: {
+                type: 'ajax',
+                url: URL_PREFIX+'?f=ifc_explorer_api.get_menu_list',
+                reader: {
+                    type: 'json',
+                    root: 'data',
+                    totalProperty: 'count'
+                },
+                simpleSortMode: true,
+                listeners: {
+                    exception: function(proxy, response, operation, options) {
+                        var errorMsg = '';
+                        try {
+                            var result = eval('('+response.responseText+')');
+                            if (!result.success) {
+                                errorMsg = result.error.message;
+                            }
+                        } catch(e) {
+                            errorMsg = 'Сервер вернул код ошибки '+response.status+'.';
+                        } finally {
+                            Ext.Msg.alert('Ошибка', errorMsg, function() {
+                                if (result['error']['message'].indexOf('ORA-20002') != (-1)) {
+                                    window.parent.location.href = '/login.html';
+                                }
+                            });
+                        }
+                    }
+                }
+            },
+            autoLoad: true,
+            listeners: {
+                load: function(store, records, successful, operation, options) {
+                    if (successful) {
+                        var menuItems = store.addMenuItems(store, null, records);
+                        menuItems.push({
+                            icon: '/images/icons/palette.png',
+                            text: 'Тема',
+                            menu: [{
+                                icon: '/images/icons/themes/default.png',
+                                text: 'Светло-синяя',
+                                hidden: theme==='default',
+                                handler: function() {
+                                    window.location.href='/explorer.html?updthm=1';
+                                }
+                            },{
+                                icon: '/images/icons/themes/gray.png',
+                                text: 'Серая',
+                                hidden: theme==='gray',
+                                handler: function() {
+                                    window.location.href='/explorer.html?updthm=1&theme=gray';
+                                }
+                            }]
+                        });
+                        menuItems.push({
+                            icon: '/images/icons/key.png',
+                            text: 'Сменить пароль',
+                            handler: function() {
+                                Ext.ComponentManager.get('Window_changePassword').show();
+                            }
+                        });
+                        menuItems.push({
+                            icon: '/images/icons/logout.png',
+                            text: 'Выход',
+                            handler: function() {
+                                Ext.Msg.show({
+                                    title:'Выход',
+                                    msg: 'Выйти из системы?',
+                                    buttons: Ext.Msg.YESNO,
+                                    icon: Ext.window.MessageBox.QUESTION,
+                                    fn: function(btn) {
+                                        if (btn == 'yes') {
+                                            Ext.Ajax.request({
+                                                url: URL_PREFIX+'?f=ifc_api.logout',
+                                                success: function(response) {
+                                                    if (response.responseText.length == 0) {
+                                                        OnServerError();
+                                                    }
+                                                    window.location.href = '/login.html';
+                                                },
+                                                failure: function(response, opts) {
+                                                    OnServerError();
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        Ext.getCmp('Button_start').menu = Ext.create('Ext.menu.Menu', {
+                            items: [menuItems],
+                            resizable: true,
+                            autoScroll: true
+                        });
+						//запускаем приложение если установлена переменная app
+						if(	getCGIVar('app') != -1 ) {
+							//ищем приложении в разрешенных к запуску
+							var appVar = getCGIVar('app');
+							store.each(function(record) {
+								if(record.get('application_alias') == appVar) {
+									runApplication(record.get('application_alias'), record.get('item_name'), null, null);
+								}
+							});
+						}
+                    }
+                }
+            },
+            addMenuItems: function(store, parent, records) {
+                var result = [];
+                for (var i=0; i<records.length; i++) {
+                    if (records[i].data['parent_item_code'] === parent) {
+                        var item = {};
+                        if ((records[i].data['application_alias']!==null) && (records[i].data['application_alias'].length>0)) {
+                            item['icon'] = records[i].data['application_type'] === 'extjs6' ? '/ExtJS6' : '';
+                            item['icon'] += '/images/applications/small/'+records[i].data['application_alias']+'.png';
+                            item['text'] = records[i].data['item_name'];
+                            item['applicationAlias'] = records[i].data['application_alias'];
+                            item['applicationType'] = records[i].data['application_type'];
+                            item['itemName'] = records[i].data['item_name'];
+                            item['handler'] = function(component) {
+                                runApplication(component['applicationAlias'], component['itemName'], null, component['applicationType']);
+                            }
+                        } else {
+                            item['icon'] = '/images/icons/folder.png';
+                            item['text'] = records[i].data['item_name'];
+                            item['menu'] = store.addMenuItems(store, records[i].data['item_code'], records);
+                        }
+                        if (parent === null) {
+                            result.push(item);
+                        } else {
+                            result.push(item);
+                        }
+                    }
+                }
+                return result;
+            }
+        });
+        Ext.tip.QuickTipManager.register({
+            target: 'ico-changepwd',
+            text: 'Смена пароля'
+        });
+        Ext.tip.QuickTipManager.register({
+            target: 'ico-palette',
+            text: 'Выбрать тему'
+        });
+        Ext.tip.QuickTipManager.register({
+            target: 'ico-logout',
+            text: 'Выход из системы'
+        });
+    }
+
+    //Горячие клавиши
+    // через Ext.KeyMap не удалось остановить проброс сообщения выше (stopEvent не работает)
+    KeyMapHandler = function() {
+
+        keyhandler = function(e){
+            e = e || window.event;
+
+            if (e.keyCode == Ext.EventObject.TAB && e.ctrlKey && !e.altKey && !e.shiftKey ){
+
+                if (e.stopPropagation) {
+                    e.stopPropagation()
+                } else {
+                    e.cancelBubble = true
+                }
+                if (e.preventDefault) {
+                    e.preventDefault()
+                } else {
+                    e.returnValue = false
+                }
+
+                var explorer = Ext.getCmp('Explorer');
+                var items = explorer.items;
+                explorer.focus();
+                var index = items.indexOf( explorer.getActiveTab() );
+                if( index == items.getCount() - 1 )
+                    index = 0;
+                else
+                    index += 1;
+
+                explorer.setActiveTab( items.getAt( index ) );
+                explorer.tabBar.focus()
+            };
+        };
+
+
+        this.addFrame = function( frame ) {
+            this.addListener( frame.contentDocument );
+        }
+
+        this.addListener = function( frameDocument ) {
+            if (frameDocument.addEventListener){
+                frameDocument.addEventListener('keypress', keyhandler, false);
+            } else if (frameDocument.attachEvent){
+                frameDocument.attachEvent('onkeypress', keyhandler);
+            } else {
+                frameDocument.onkeypress = keyhandler;
+            };
+        }
+
+    }
+
+    this.keyMapHandler = new KeyMapHandler;
+    keyMapHandler.addListener( document );
+
+    hideStartMenu = function() {
+        Ext.getCmp('Button_start').menu.hide();
+    }
+});
+</script>
+</head>
+<body>
+</body>
+</html>
