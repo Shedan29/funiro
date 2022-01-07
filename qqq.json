@@ -1,0 +1,5 @@
+{"data":[{"n1":null,"d":null,"metrics_name":"TOTAL_INFO","metrics_data":"Кол-во WEB-пользователей: 443 Кол-во ТСД: 222"},{"n1":222,"d":"07.01.2022 19:21:59","metrics_name":"TERM_USER","metrics_data":null},{"n1":443,"d":"07.01.2022 19:21:59","metrics_name":"IFC_USER","metrics_data":null}],"count":3}
+
+
+
+{"success": true}
